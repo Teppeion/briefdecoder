@@ -9,6 +9,23 @@ export default async function handler(req, res) {
   const { content } = req.body;
   if (!content) return res.status(400).json({ error: 'Missing content' });
 
+  // ═══ 从环境变量读取配置 ═══
+  const LLM_API_URL = process.env.LLM_API_URL;
+  const LLM_API_KEY = process.env.LLM_API_KEY;
+  const LLM_MODEL = process.env.LLM_MODEL;
+
+  // 配置校验 — 便于调试
+  if (!LLM_API_URL || !LLM_API_KEY || !LLM_MODEL) {
+    return res.status(500).json({
+      error: 'Missing env vars',
+      detail: {
+        LLM_API_URL: LLM_API_URL ? 'set' : 'MISSING',
+        LLM_API_KEY: LLM_API_KEY ? 'set' : 'MISSING',
+        LLM_MODEL: LLM_MODEL ? 'set' : 'MISSING'
+      }
+    });
+  }
+
   const SYS = `你是一位顶级广告策略总监，曾服务过奥美、李奥贝纳、灵智等顶级4A，亲历过数百个大品牌的brief解码工作。你的分析风格以犀利、有观点、不废话著称。
 
 【铁律】
@@ -84,14 +101,14 @@ export default async function handler(req, res) {
 }`;
 
   try {
-    const response = await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', {
+    const response = await fetch(LLM_API_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.QWEN_API_KEY}`
+        'Authorization': `Bearer ${LLM_API_KEY}`
       },
       body: JSON.stringify({
-        model: 'qwen-max',
+        model: LLM_MODEL,
         messages: [
           { role: 'system', content: SYS },
           {
