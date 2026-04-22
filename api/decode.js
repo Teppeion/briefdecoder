@@ -14,7 +14,6 @@ export default async function handler(req, res) {
   const LLM_API_KEY = process.env.LLM_API_KEY;
   const LLM_MODEL = process.env.LLM_MODEL;
 
-  // 配置校验 — 便于调试
   if (!LLM_API_URL || !LLM_API_KEY || !LLM_MODEL) {
     return res.status(500).json({
       error: 'Missing env vars',
@@ -36,8 +35,16 @@ export default async function handler(req, res) {
 4. 洞察必须是反直觉的真相，不是大家都知道的废话
 5. 每个子模块100-200字，有实质内容
 
+【JSON格式铁律 — 极其重要】
+- 严格输出纯JSON，无markdown、无代码块、无任何前后缀文字
+- 所有字符串值里的双引号必须用反斜杠转义：\\"
+- 字符串值里不要出现未转义的换行符，需要换行用 \\n
+- 不要使用中文引号""、''，只能用英文双引号"
+- 每个对象最后一个属性后面不要加逗号
+- 输出必须是完整闭合的JSON，不能中途截断
+
 【输出格式】
-严格输出纯JSON，无markdown、无代码块。结构如下，每个维度是一个对象，包含指定的子模块：
+结构如下，每个维度是一个对象，包含指定的子模块：
 
 {
   "business": {
@@ -100,6 +107,29 @@ export default async function handler(req, res) {
   }
 }`;
 
+  // ═══ 尝试解析 LLM 输出，包含多种修复策略 ═══
+  function tryParseJSON(raw) {
+    // 策略 0：原样解析
+    try { return { ok: true, data: JSON.parse(raw) }; } catch {}
+
+    // 策略 1：提取最外层 {...}
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) return { ok: false, reason: 'no-json-object-found', raw };
+    let s = match[0];
+
+    try { return { ok: true, data: JSON.parse(s) }; } catch {}
+
+    // 策略 2：清理常见问题
+    // 2a. 替换中文引号为英文引号
+    s = s.replace(/[""]/g, '"').replace(/['']/g, "'");
+    // 2b. 去除对象/数组最后元素后的尾逗号: ,} 和 ,]
+    s = s.replace(/,(\s*[}\]])/g, '$1');
+
+    try { return { ok: true, data: JSON.parse(s) }; } catch (e) {
+      return { ok: false, reason: e.message, raw, cleaned: s };
+    }
+  }
+
   try {
     const response = await fetch(LLM_API_URL, {
       method: 'POST',
@@ -114,6 +144,8 @@ export default async function handler(req, res) {
           {
             role: 'user',
             content: `请解码以下Brief，严格按照系统提示的格式输出嵌套JSON，每个维度包含指定子模块，内容要有深度有观点，禁止废话。
+
+特别提醒：输出必须是合法JSON，字符串里的引号必须转义，不要用中文引号""，所有对象最后一个属性后面不要加逗号。
 
 Brief内容：
 ${content}`
@@ -130,13 +162,27 @@ ${content}`
     }
 
     let raw = data.choices?.[0]?.message?.content || '';
-    raw = raw.trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
-    const m = raw.match(/\{[\s\S]*\}/);
-    if (m) raw = m[0];
+    raw = raw.trim()
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/i, '')
+      .replace(/```\s*$/i, '')
+      .trim();
 
-    const result = JSON.parse(raw);
-    res.status(200).json({ result });
+    const parsed = tryParseJSON(raw);
+    if (parsed.ok) {
+      return res.status(200).json({ result: parsed.data });
+    }
+
+    // 解析失败 — 打日志便于排查 + 返回可诊断信息
+    console.error('[JSON PARSE FAILED]', parsed.reason);
+    console.error('[RAW OUTPUT]', raw.slice(0, 2000));
+    return res.status(500).json({
+      error: 'AI返回内容不是合法JSON',
+      reason: parsed.reason,
+      hint: '请点击"重新解码"再试一次，AI偶尔会格式出错。如多次失败请联系管理员',
+      rawPreview: raw.slice(0, 500)
+    });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return res.status(500).json({ error: e.message });
   }
 }
