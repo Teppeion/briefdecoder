@@ -1,3 +1,6 @@
+import { getSession } from '../lib/auth.js';
+import { writeBitableRecord } from '../lib/feishu.js';
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -6,10 +9,15 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
+  // ═══ 飞书登录校验 ═══
+  const session = getSession(req);
+  if (!session) {
+    return res.status(401).json({ error: '未登录，请先通过飞书登录' });
+  }
+
   const { content } = req.body;
   if (!content) return res.status(400).json({ error: 'Missing content' });
 
-  // ═══ 从环境变量读取配置 ═══
   const LLM_API_URL = process.env.LLM_API_URL;
   const LLM_API_KEY = process.env.LLM_API_KEY;
   const LLM_MODEL = process.env.LLM_MODEL;
@@ -107,24 +115,14 @@ export default async function handler(req, res) {
   }
 }`;
 
-  // ═══ 尝试解析 LLM 输出，包含多种修复策略 ═══
   function tryParseJSON(raw) {
-    // 策略 0：原样解析
     try { return { ok: true, data: JSON.parse(raw) }; } catch {}
-
-    // 策略 1：提取最外层 {...}
     const match = raw.match(/\{[\s\S]*\}/);
     if (!match) return { ok: false, reason: 'no-json-object-found', raw };
     let s = match[0];
-
     try { return { ok: true, data: JSON.parse(s) }; } catch {}
-
-    // 策略 2：清理常见问题
-    // 2a. 替换中文引号为英文引号
     s = s.replace(/[""]/g, '"').replace(/['']/g, "'");
-    // 2b. 去除对象/数组最后元素后的尾逗号: ,} 和 ,]
     s = s.replace(/,(\s*[}\]])/g, '$1');
-
     try { return { ok: true, data: JSON.parse(s) }; } catch (e) {
       return { ok: false, reason: e.message, raw, cleaned: s };
     }
@@ -145,7 +143,7 @@ export default async function handler(req, res) {
             role: 'user',
             content: `请解码以下Brief，严格按照系统提示的格式输出嵌套JSON，每个维度包含指定子模块，内容要有深度有观点，禁止废话。
 
-特别提醒：输出必须是合法JSON，字符串里的引号必须转义，不要用中文引号""，所有对象最后一个属性后面不要加逗号。
+特别提醒：输出必须是合法JSON，字符串里的引号必须转义，不要用中文引号，所有对象最后一个属性后面不要加逗号。
 
 Brief内容：
 ${content}`
@@ -169,19 +167,31 @@ ${content}`
       .trim();
 
     const parsed = tryParseJSON(raw);
-    if (parsed.ok) {
-      return res.status(200).json({ result: parsed.data });
+    if (!parsed.ok) {
+      console.error('[JSON PARSE FAILED]', parsed.reason);
+      console.error('[RAW OUTPUT]', raw.slice(0, 2000));
+      return res.status(500).json({
+        error: 'AI返回内容不是合法JSON',
+        reason: parsed.reason,
+        hint: '请点击"重新解码"再试一次'
+      });
     }
 
-    // 解析失败 — 打日志便于排查 + 返回可诊断信息
-    console.error('[JSON PARSE FAILED]', parsed.reason);
-    console.error('[RAW OUTPUT]', raw.slice(0, 2000));
-    return res.status(500).json({
-      error: 'AI返回内容不是合法JSON',
-      reason: parsed.reason,
-      hint: '请点击"重新解码"再试一次，AI偶尔会格式出错。如多次失败请联系管理员',
-      rawPreview: raw.slice(0, 500)
-    });
+    // ═══ 写日志到飞书多维表格（失败不影响主流程） ═══
+    try {
+      await writeBitableRecord({
+        '时间': Date.now(),
+        '用户名': session.name,
+        '邮箱': session.email || '',
+        'Open ID': session.sub,
+        'Brief原文': content,
+        '解码结果': JSON.stringify(parsed.data, null, 2)
+      });
+    } catch (logErr) {
+      console.error('[BITABLE LOG FAILED]', logErr.message);
+    }
+
+    return res.status(200).json({ result: parsed.data });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }

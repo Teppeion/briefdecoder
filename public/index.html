@@ -109,9 +109,35 @@ body{font-family:'Plus Jakarta Sans',sans-serif;background:#e8eaf6;min-height:10
   color:#1a5ff8;
   font-weight:600;
 }
+
+/* LOGIN GATE */
+#login-gate{display:none;position:fixed;inset:0;z-index:200;background:#e8eaf6;align-items:center;justify-content:center;padding:24px;overflow:hidden}
+#login-gate.on{display:flex}
+#login-card{position:relative;z-index:1;width:100%;max-width:420px;border-radius:26px;padding:56px 44px 48px;display:flex;flex-direction:column;align-items:center;text-align:center;animation:fu 0.45s ease}
+.lg-hero{font-size:clamp(34px,6vw,48px);font-weight:800;letter-spacing:-1.5px;line-height:1;margin-bottom:36px}
+.lg-hero .dk{color:#1a1f3a}.lg-hero .bl{color:#1a5ff8}
+#lg-btn{width:100%;background:linear-gradient(135deg,#1a5ff8,#4a8aff);border:none;border-radius:14px;color:#fff;font-family:'Plus Jakarta Sans',sans-serif;font-size:14px;font-weight:700;padding:15px;cursor:pointer;transition:all 0.22s;box-shadow:0 5px 24px rgba(26,95,248,0.28);display:flex;align-items:center;justify-content:center;gap:8px}
+#lg-btn:hover{transform:translateY(-2px);box-shadow:0 8px 32px rgba(26,95,248,0.38)}
+
+#userchip{display:none;align-items:center;gap:6px;font-size:11px;font-weight:500;padding:4px 10px;border-radius:99px;border:1px solid rgba(26,31,58,0.12);color:rgba(26,31,58,0.55);background:rgba(255,255,255,0.4)}
+#userchip .un{font-weight:600;color:rgba(26,31,58,0.7)}
+#userchip a{color:rgba(26,31,58,0.4);text-decoration:none;padding-left:8px;margin-left:6px;border-left:1px solid rgba(26,31,58,0.12)}
+#userchip a:hover{color:#cc3333}
 </style>
 </head>
 <body>
+<div id="login-gate">
+  <div class="blob b1" style="position:absolute"></div>
+  <div class="blob b2" style="position:absolute"></div>
+  <div class="blob b3" style="position:absolute"></div>
+  <div id="login-card" class="glass">
+    <div class="lg-hero"><span class="dk">BRIEF</span><span class="bl">DECODER</span></div>
+    <button id="lg-btn" onclick="location.href='/api/auth/login'">
+      <span>✦</span> 使用飞书登录
+    </button>
+  </div>
+</div>
+
 <div class="blob b1"></div>
 <div class="blob b2"></div>
 <div class="blob b3"></div>
@@ -122,6 +148,7 @@ body{font-family:'Plus Jakarta Sans',sans-serif;background:#e8eaf6;min-height:10
   <div class="logo">Brief<span>Decoder</span></div>
   <div class="right">
     <button id="back" onclick="goUp()">← 重新上传</button>
+    <div id="userchip"><span class="un" id="uname"></span><a href="/api/auth/logout">登出</a></div>
     <div class="pill" id="pill">Ready</div>
   </div>
 </div>
@@ -163,6 +190,26 @@ body{font-family:'Plus Jakarta Sans',sans-serif;background:#e8eaf6;min-height:10
 </div>
 
 <script>
+// ═══ 登录守卫 ═══
+(async ()=>{
+  try{
+    const r = await fetch('/api/me');
+    if(!r.ok){
+      document.getElementById('login-gate').classList.add('on');
+      document.getElementById('topbar').style.display='none';
+      document.getElementById('page-up').style.display='none';
+      return;
+    }
+    const user = await r.json();
+    document.getElementById('uname').textContent = user.name || '';
+    document.getElementById('userchip').style.display = 'flex';
+  }catch(e){
+    document.getElementById('login-gate').classList.add('on');
+    document.getElementById('topbar').style.display='none';
+    document.getElementById('page-up').style.display='none';
+  }
+})();
+
 const STEPS=[
   {id:"01",key:"business",zh:"商业逻辑"},
   {id:"02",key:"competition",zh:"竞品威胁扫描"},
@@ -233,11 +280,9 @@ function setView(v){
 
 // Highlight keywords: wrap quoted text 「」or【】or key phrases in .hl
 function highlight(text){
-  // Highlight text inside 「」【】《》
   text = text.replace(/「([^」]+)」/g,'<span class="hl">$1</span>');
   text = text.replace(/【([^】]+)】/g,'<span class="hl">$1</span>');
   text = text.replace(/《([^》]+)》/g,'<span class="hl">$1</span>');
-  // Highlight text after ——（em-dash key insight marker）until punctuation
   text = text.replace(/——([^，。！？\n]{4,20})/g,'——<span class="hl">$1</span>');
   return text;
 }
@@ -302,6 +347,7 @@ goBtn.addEventListener('click',async()=>{
 
   try{
     const resp=await fetch('/api/decode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:fileData.content})});
+    if(resp.status===401){location.reload();return}
     const data=await resp.json();
     if(!resp.ok||data.error)throw new Error(data.error||'解码失败');
     results=data.result;
