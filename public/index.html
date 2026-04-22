@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>BriefDecoder</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+  if (window.pdfjsLib) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+</script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 *{box-sizing:border-box;margin:0;padding:0}
@@ -245,24 +251,55 @@ drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('drag'
 fi.addEventListener('change',()=>{if(fi.files[0])handleFile(fi.files[0])});
 function fmt(b){if(b<1024)return b+' B';if(b<1048576)return(b/1024).toFixed(1)+' KB';return(b/1048576).toFixed(1)+' MB'}
 
+// ═══ PDF 文字提取 ═══
+async function extractPdfText(file){
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({data: buf}).promise;
+  let full = '';
+  for(let i=1; i<=pdf.numPages; i++){
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const pageText = content.items.map(it => it.str).join(' ');
+    full += pageText + '\n\n';
+  }
+  return full.trim();
+}
+
 async function handleFile(file){
   const isPDF=file.type==='application/pdf';
   const isDOCX=/\.docx?$/i.test(file.name);
   const isTXT=/\.txt$/i.test(file.name);
-  if(!isPDF&&!isDOCX&&!isTXT){const e=document.getElementById('uerr');e.textContent='仅支持 PDF、Word (.docx) 或 TXT';e.style.display='block';return}
-  document.getElementById('uerr').style.display='none';
+  const errBox = document.getElementById('uerr');
+  if(!isPDF&&!isDOCX&&!isTXT){errBox.textContent='仅支持 PDF、Word (.docx) 或 TXT';errBox.style.display='block';return}
+  errBox.style.display='none';
   document.getElementById('fic').textContent=isPDF?'📕':isDOCX?'📘':'📄';
   document.getElementById('fnm').textContent=file.name;
-  document.getElementById('fmeta').textContent=fmt(file.size)+(isPDF?' · PDF':isDOCX?' · Word':' · TXT');
+  document.getElementById('fmeta').textContent=fmt(file.size)+(isPDF?' · PDF · 解析中…':isDOCX?' · Word':' · TXT');
   drop.style.display='none';
   document.getElementById('fbadge').style.display='flex';
-  goBtn.disabled=false;
-  if(isPDF){
-    fileData={type:'text',content:'[PDF文件，请根据上下文分析]'};
-  }else if(isDOCX){
-    try{const buf=await file.arrayBuffer();const r=await mammoth.extractRawText({arrayBuffer:buf});fileData={type:'text',content:r.value}}
-    catch(e){fileData={type:'text',content:'[无法解析Word文件]'}}
-  }else{fileData={type:'text',content:await file.text()}}
+  goBtn.disabled=true;
+
+  try{
+    if(isPDF){
+      const text = await extractPdfText(file);
+      if(!text || text.length < 20){
+        throw new Error('此 PDF 内容无法提取（可能是扫描件或纯图片），请转为 Word 文档后再上传');
+      }
+      fileData={type:'text',content:text};
+      document.getElementById('fmeta').textContent=fmt(file.size)+' · PDF · '+text.length+' 字';
+    }else if(isDOCX){
+      const buf=await file.arrayBuffer();
+      const r=await mammoth.extractRawText({arrayBuffer:buf});
+      fileData={type:'text',content:r.value};
+    }else{
+      fileData={type:'text',content:await file.text()};
+    }
+    goBtn.disabled=false;
+  }catch(e){
+    errBox.textContent = '读取失败：' + e.message;
+    errBox.style.display = 'block';
+    clearF();
+  }
 }
 
 function clearF(){fileData=null;fi.value='';drop.style.display='flex';document.getElementById('fbadge').style.display='none';goBtn.disabled=true}
@@ -278,7 +315,7 @@ function setView(v){
   document.getElementById('res').style.display=v==='res'?'block':'none';
 }
 
-// Highlight keywords: wrap quoted text 「」or【】or key phrases in .hl
+// Highlight keywords
 function highlight(text){
   text = text.replace(/「([^」]+)」/g,'<span class="hl">$1</span>');
   text = text.replace(/【([^】]+)】/g,'<span class="hl">$1</span>');
