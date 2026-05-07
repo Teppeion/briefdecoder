@@ -110,11 +110,8 @@ body{font-family:'Plus Jakarta Sans',sans-serif;background:#e8eaf6;min-height:10
 .sub-text p{margin-bottom:14px}
 .sub-text p:last-child{margin-bottom:0}
 
-/* highlight — the magic */
-.hl{
-  color:#1a5ff8;
-  font-weight:600;
-}
+/* highlight */
+.hl{color:#1a5ff8;font-weight:600}
 
 /* LOGIN GATE */
 #login-gate{display:none;position:fixed;inset:0;z-index:200;background:#e8eaf6;align-items:center;justify-content:center;padding:24px;overflow:hidden}
@@ -383,7 +380,21 @@ goBtn.addEventListener('click',async()=>{
   prog.style.display='block';pf.style.width='80%';
 
   try{
-    const resp=await fetch('/api/decode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:fileData.content})});
+    // ═══ 超时控制：120秒 ═══
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120000);
+    let resp;
+    try {
+      resp = await fetch('/api/decode', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({content: fileData.content}),
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+
     if(resp.status===401){location.reload();return}
     const data=await resp.json();
     if(!resp.ok||data.error)throw new Error(data.error||'解码失败');
@@ -399,7 +410,8 @@ goBtn.addEventListener('click',async()=>{
     showStep('business');
   }catch(e){
     prog.style.display='none';pill.textContent='Error';pill.className='pill';
-    document.getElementById('cedt').textContent=e.message;
+    const msg = e.name==='AbortError' ? '请求超时（超过120秒），请重试或换用更短的Brief' : e.message;
+    document.getElementById('cedt').textContent=msg;
     setView('err');
   }finally{
     goBtn.disabled=false;goBtn.textContent='✦ 开始解码';
